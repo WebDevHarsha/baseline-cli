@@ -7,7 +7,14 @@
     "blc": "node --no-warnings index.js scan --summary",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "bin": "./index.js",
+  "bin": {
+    "blc": "./bin/blc"
+  },
+  "files": [
+    "bin/",
+    "index.js",
+    "src/"
+  ],
   "keywords": [],
   "author": "",
   "license": "ISC",
