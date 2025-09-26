@@ -1,13 +1,21 @@
 #!/usr/bin/env node
 import figlet from "figlet";
-import gradient from "gradient-string";
+import { pastel } from "gradient-string";
 
 function main(){
+    startMsg();
+    
+}
+
+function startMsg(){
     console.clear();
-    const startMsg=`Welcome     to \n Baseline      CLI`
+    const startMsg=`Welcome     to \n Baseline   -   CLI`
 
     figlet(startMsg, (err, data) => {
-        console.log(gradient.pastel.multiline(data))
+        console.log(pastel.multiline(data))
+        if(err){
+            console.log("oops we have an issue...")
+        }
     })
 }
 
