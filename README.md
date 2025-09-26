@@ -1,4 +1,5 @@
 # baseline-check (blc)
+![alt text](image.png)
 
 Lightweight CLI to scan a project for used web platform features and report their Baseline status.
 
