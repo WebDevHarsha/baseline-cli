@@ -6,6 +6,20 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const indexJs = path.join(__dirname, '..', 'index.js');
 
-const args = ['--no-warnings', indexJs, 'scan', ...process.argv.slice(2)];
+// Normalize user args: remove a single literal `--` used by runners to separate args
+let userArgs = process.argv.slice(2).filter(a => a !== '--');
+// If the user passed no arguments, default to showing all findings
+if (userArgs.length === 0) userArgs.push('--all');
+
+// If the user asked for a summary but didn't request --all, imply --all so
+// `npx baseline-check -- --summary` summarizes the whole project.
+const askedSummary = userArgs.includes('--summary') || userArgs.includes('-s');
+const askedAll = userArgs.includes('--all');
+if (askedSummary && !askedAll) userArgs.push('--all');
+const args = ['--no-warnings', indexJs, 'scan', ...userArgs];
+if (process.env.BLC_DEBUG) {
+	// print to stderr so stdio: 'inherit' still shows main output
+	console.error('blc debug - resolved args:', args.join(' '));
+}
 const child = spawn(process.execPath, args, { stdio: 'inherit' });
 child.on('exit', code => process.exit(code));

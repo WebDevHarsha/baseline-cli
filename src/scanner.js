@@ -26,14 +26,24 @@ function scanCSS(text){
   const ast = csstree.parse(text, { parseValue: true, parseRulePrelude: true });
   const props = [];
   csstree.walk(ast, node => {
-    if(node.type === 'Declaration'){
+    if (node.type === 'Declaration') {
       const prop = node.property;
-      // attempt to get identifier value
+      // generate a textual value for more accurate mapping (handles functions, identifiers, hyphens)
       let value = null;
-      if(node.value && node.value.children){
-        const id = node.value.children.find(c => c.type === 'Identifier' || c.type === 'Hash' || c.type === 'Number');
-        if(id) value = id.name || id.value;
+      try {
+        if (node.value) {
+          value = csstree.generate(node.value).trim();
+          // if value is wrapped (e.g. "url(...)"), keep inner token where possible
+          if (value === '') value = null;
+        }
+      } catch (e) {
+        // fallback to the previous simple approach
+        if (node.value && node.value.children) {
+          const id = node.value.children.find(c => c.type === 'Identifier' || c.type === 'Hash' || c.type === 'Number');
+          if (id) value = id.name || id.value;
+        }
       }
+
       props.push({ property: prop, value });
     }
   });
@@ -41,17 +51,36 @@ function scanCSS(text){
 }
 
 function scanHTML(text){
-  const doc = parse5.parseFragment(text);
+  // parse full documents and fragments (works for both)
+  let doc;
+  try {
+    doc = parse5.parse(text);
+  } catch (e) {
+    doc = parse5.parseFragment(text);
+  }
+
   const elements = [];
   function walk(node){
+    if(!node) return;
     if(node.nodeName && node.nodeName !== '#text'){
       const tag = node.tagName || node.nodeName;
-      const attrs = (node.attrs || []).map(a => a.name);
+      const attrs = (node.attrs || []).map(a => ({ name: a.name, value: a.value }));
       elements.push({ tag, attrs });
     }
-    const children = node.childNodes || node.content && node.content.childNodes || [];
+
+    // collect inline script text as js candidates and inline styles
+    if (node.tagName === 'script' && node.childNodes) {
+      for (const c of node.childNodes) {
+        if (c.nodeName === '#text' && c.value) {
+          elements.push({ tag: 'script', script: c.value });
+        }
+      }
+    }
+
+    const children = node.childNodes || (node.content && node.content.childNodes) || [];
     for(const c of children) walk(c);
   }
+
   for(const c of doc.childNodes || []) walk(c);
   return elements;
 }
@@ -93,8 +122,30 @@ export async function scanProject(rootPatterns){
       } else if(f.path.endsWith('.html')){
         const elems = scanHTML(f.text);
         for(const e of elems){
-          const bcd = mapHTMLElementToBCD(e.tag);
-          if(bcd) entry.features.push({ key: bcd, type: 'html' });
+          // normal element tags
+          if(e.tag && e.tag !== 'script'){
+            const bcd = mapHTMLElementToBCD(e.tag);
+            if(bcd) entry.features.push({ key: bcd, type: 'html' });
+
+            // check inline style attribute
+            const styleAttr = (e.attrs || []).find(a => a.name === 'style');
+            if (styleAttr && styleAttr.value) {
+              // parse inline declarations by wrapping in a rule
+              try {
+                const inlineProps = scanCSS(`x{${styleAttr.value}}`);
+                for (const p of inlineProps) {
+                  const bcd = mapCSSPropToBCD(p.property, p.value);
+                  if (bcd) entry.features.push({ key: bcd, type: 'css' });
+                }
+              } catch (err) { /* ignore */ }
+            }
+          }
+
+          // inline script content
+          if(e.tag === 'script' && e.script){
+            const candidates = extractJsCandidates(e.script);
+            for(const c of candidates) entry.features.push({ key: c, type: 'js' });
+          }
         }
       } else if(/\.jsx?$|\.tsx?$/.test(f.path)){
         const candidates = extractJsCandidates(f.text);
@@ -116,12 +167,41 @@ export async function scanProject(rootPatterns){
     for(const f of feats){
       try{
         if(f.type === 'css' || f.type === 'html'){
-          const status = getStatus(null, f.key);
+          // try full BCD key first, then fallback to parent (property) key
+          let status = null;
+          try {
+            status = getStatus(null, f.key);
+          } catch (err) {
+            // compute-baseline may throw for unindexable/unknown bcd keys; treat as not found and try fallbacks
+            status = null;
+          }
+          let usedKey = f.key;
+          if(!status && f.key.includes('.')){
+            const parts = f.key.split('.');
+            // drop the last segment and try again (e.g. css.properties.prop.value -> css.properties.prop)
+            const parentKey = parts.slice(0, -1).join('.');
+            try {
+              status = getStatus(null, parentKey);
+            } catch (err) {
+              status = null;
+            }
+            if(status) usedKey = parentKey;
+          }
+
+          // if still not found, try to locate a feature that lists this compat key and use its status
+          if(!status){
+            const featureId = Object.keys(features).find(id => (features[id].compat_features || []).includes(f.key));
+            if(featureId && features[featureId].status) {
+              status = features[featureId].status;
+              usedKey = features[featureId].compat_features && features[featureId].compat_features[0] || usedKey;
+            }
+          }
+
           if(status){
-            // find feature id that contains the compat_feature
-            const featureId = Object.keys(features).find(id => (features[id].compat_features || []).includes(f.key) || id === f.key || id === f.key.split('.')[0]);
-            const featureName = featureId ? (features[featureId].name || featureId) : f.key;
-            reportByFile[file].push({ key: f.key, featureId, featureName, status });
+            // find feature id that contains the compat_feature (prefer exact mapping)
+            const featureId = Object.keys(features).find(id => (features[id].compat_features || []).includes(usedKey) || id === usedKey || id === usedKey.split('.')[0]);
+            const featureName = featureId ? (features[featureId].name || featureId) : usedKey;
+            reportByFile[file].push({ key: usedKey, featureId, featureName, status });
           } else {
             // skip unmapped css/html keys
             continue;
