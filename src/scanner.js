@@ -123,7 +123,8 @@ export async function scanProject(rootPatterns){
             const featureName = featureId ? (features[featureId].name || featureId) : f.key;
             reportByFile[file].push({ key: f.key, featureId, featureName, status });
           } else {
-            reportByFile[file].push({ key: f.key, featureId: null, featureName: f.key, status: { baseline: false } });
+            // skip unmapped css/html keys
+            continue;
           }
         } else if(f.type === 'js'){
           // try to map JS candidate to a feature
@@ -133,11 +134,13 @@ export async function scanProject(rootPatterns){
             const status = features[featureId].status || { baseline: false };
             reportByFile[file].push({ key: f.key, featureId, featureName: features[featureId].name || featureId, status });
           } else {
-            reportByFile[file].push({ key: f.key, featureId: null, featureName: f.key, status: { baseline: false } });
+            // skip unmapped JS candidates
+            continue;
           }
         }
       }catch(e){
-        reportByFile[file].push({ key: f.key, featureId: null, featureName: f.key, status: { baseline: false } });
+        // ignore parse/enrich errors and skip
+        continue;
       }
     }
   }
