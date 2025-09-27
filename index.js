@@ -100,7 +100,8 @@ function startMsg() {
     console.clear();
     const startMsg = `Welcome     to \n Baseline   -   CLI`;
     figlet(startMsg, (err, data) => {
-        if (!err) console.log(pastel.multiline(data));
+        // if (!err) console.log(pastel.multiline(data));
+        if (!err) console.log(data);
     });
 }
 
