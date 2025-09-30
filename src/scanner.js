@@ -3,7 +3,7 @@ import fs from 'fs/promises';
 import * as csstree from 'css-tree';
 import * as parse5 from 'parse5';
 import { getStatus } from 'compute-baseline';
-import { features } from 'web-features';
+import { features, groups } from 'web-features';
 
 function unique(arr){
   return Array.from(new Set(arr));
@@ -240,7 +240,9 @@ export async function scanProject(rootPatterns){
             // find feature id that contains the compat_feature (prefer exact mapping)
             const featureId = Object.keys(features).find(id => (features[id].compat_features || []).includes(usedKey) || id === usedKey || id === usedKey.split('.')[0]);
             const featureName = featureId ? (features[featureId].name || featureId) : usedKey;
-            reportByFile[file].push({ key: usedKey, featureId, featureName, status, line: f.line });
+            const group = featureId ? features[featureId].group : null;
+            const groupName = group ? (groups[group]?.name || group) : null;
+            reportByFile[file].push({ key: usedKey, featureId, featureName, status, line: f.line, group: groupName });
           } else {
             // skip unmapped css/html keys
             continue;
@@ -251,7 +253,9 @@ export async function scanProject(rootPatterns){
           const featureId = Object.keys(features).find(id => id.toLowerCase().includes(candidate) || (features[id].name || '').toLowerCase().includes(candidate) || (features[id].compat_features || []).some(k => k.toLowerCase().includes(candidate)));
           if(featureId){
             const status = features[featureId].status || { baseline: false };
-            reportByFile[file].push({ key: f.key, featureId, featureName: features[featureId].name || featureId, status, line: f.line });
+            const group = features[featureId].group;
+            const groupName = group ? (groups[group]?.name || group) : null;
+            reportByFile[file].push({ key: f.key, featureId, featureName: features[featureId].name || featureId, status, line: f.line, group: groupName });
           } else {
             // skip unmapped JS candidates
             continue;
