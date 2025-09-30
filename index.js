@@ -64,7 +64,7 @@ async function main() {
             if (feats.length === 0) continue;
             lines.push(`\nFile: ${file}`);
             lines.push('─────────────────────────────────────────────');
-            lines.push(`Feature             Status          Support`);
+            lines.push(`Feature             Line Status      Support`);
             lines.push('─────────────────────────────────────────────');
             for (const f of feats.slice(0, limit)) {
                 total++;
@@ -76,8 +76,9 @@ async function main() {
                 const emoji = status === 'high' ? '✅' : status === 'low' ? '🟡' : '❌';
                 const support = status === 'high' ? `Baseline ${f.status?.baseline_high_date || ''}` : status === 'low' ? `Baseline ${f.status?.baseline_low_date || ''}` : (f.status?.support ? Object.keys(f.status.support).join(', ') : 'Expected: unknown');
                 const name = (f.featureName || f.key).padEnd(18).slice(0, 18);
+                const lineInfo = f.line ? f.line.toString().padEnd(4) : '    ';
                 const statText = status === 'high' ? 'Widely' : status === 'low' ? 'Newly' : 'Not in';
-                lines.push(`${name}  ${emoji} ${statText.padEnd(8)}  ${support}`);
+                lines.push(`${name}  ${lineInfo} ${emoji} ${statText.padEnd(8)}  ${support}`);
             }
         }
 

@@ -23,7 +23,7 @@ async function readFiles(patterns){
 }
 
 function scanCSS(text){
-  const ast = csstree.parse(text, { parseValue: true, parseRulePrelude: true });
+  const ast = csstree.parse(text, { parseValue: true, parseRulePrelude: true, positions: true });
   const props = [];
   csstree.walk(ast, node => {
     if (node.type === 'Declaration') {
@@ -44,7 +44,9 @@ function scanCSS(text){
         }
       }
 
-      props.push({ property: prop, value });
+      // Get line number from AST position
+      const line = node.loc?.start?.line || null;
+      props.push({ property: prop, value, line });
     }
   });
   return props;
@@ -60,19 +62,36 @@ function scanHTML(text){
   }
 
   const elements = [];
+  const lines = text.split('\n');
+  
+  function getLineFromOffset(offset) {
+    if (!offset) return null;
+    let currentOffset = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const lineLength = lines[i].length + 1; // +1 for newline
+      if (currentOffset + lineLength > offset) {
+        return i + 1;
+      }
+      currentOffset += lineLength;
+    }
+    return null;
+  }
+  
   function walk(node){
     if(!node) return;
     if(node.nodeName && node.nodeName !== '#text'){
       const tag = node.tagName || node.nodeName;
       const attrs = (node.attrs || []).map(a => ({ name: a.name, value: a.value }));
-      elements.push({ tag, attrs });
+      const line = node.sourceCodeLocation ? getLineFromOffset(node.sourceCodeLocation.startOffset) : null;
+      elements.push({ tag, attrs, line });
     }
 
     // collect inline script text as js candidates and inline styles
     if (node.tagName === 'script' && node.childNodes) {
       for (const c of node.childNodes) {
         if (c.nodeName === '#text' && c.value) {
-          elements.push({ tag: 'script', script: c.value });
+          const line = c.sourceCodeLocation ? getLineFromOffset(c.sourceCodeLocation.startOffset) : null;
+          elements.push({ tag: 'script', script: c.value, line });
         }
       }
     }
@@ -96,14 +115,34 @@ function mapHTMLElementToBCD(tag){
 }
 
 function extractJsCandidates(text){
-  const candidates = new Set();
-  // dotted identifiers like Array.prototype.at or navigator.gpu
-  const dotted = text.match(/\b[A-Za-z_$][A-Za-z0-9_$]*(?:\.(?:prototype\.)?[A-Za-z_$][A-Za-z0-9_$]*)+/g);
-  if(dotted){ dotted.forEach(d => candidates.add(d)); }
-  // constructor-like APIs: WebGPU, IntersectionObserver
-  const caps = text.match(/\b([A-Z][A-Za-z0-9_$]{3,})\b/g);
-  if(caps){ caps.forEach(c => candidates.add(c)); }
-  return Array.from(candidates);
+  const candidates = [];
+  const lines = text.split('\n');
+  
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex];
+    const lineNum = lineIndex + 1;
+    
+    // dotted identifiers like Array.prototype.at or navigator.gpu
+    const dottedRegex = /\b[A-Za-z_$][A-Za-z0-9_$]*(?:\.(?:prototype\.)?[A-Za-z_$][A-Za-z0-9_$]*)+/g;
+    let match;
+    while ((match = dottedRegex.exec(line)) !== null) {
+      candidates.push({ candidate: match[0], line: lineNum });
+    }
+    
+    // constructor-like APIs: WebGPU, IntersectionObserver
+    const capsRegex = /\b([A-Z][A-Za-z0-9_$]{3,})\b/g;
+    while ((match = capsRegex.exec(line)) !== null) {
+      candidates.push({ candidate: match[1], line: lineNum });
+    }
+  }
+  
+  // Remove duplicates while preserving line info (keep first occurrence)
+  const seen = new Set();
+  return candidates.filter(item => {
+    if (seen.has(item.candidate)) return false;
+    seen.add(item.candidate);
+    return true;
+  });
 }
 
 export async function scanProject(rootPatterns){
@@ -117,7 +156,7 @@ export async function scanProject(rootPatterns){
         const props = scanCSS(f.text);
         for(const p of props){
           const bcd = mapCSSPropToBCD(p.property, p.value);
-          if(bcd) entry.features.push({ key: bcd, type: 'css' });
+          if(bcd) entry.features.push({ key: bcd, type: 'css', line: p.line });
         }
       } else if(f.path.endsWith('.html')){
         const elems = scanHTML(f.text);
@@ -125,7 +164,7 @@ export async function scanProject(rootPatterns){
           // normal element tags
           if(e.tag && e.tag !== 'script'){
             const bcd = mapHTMLElementToBCD(e.tag);
-            if(bcd) entry.features.push({ key: bcd, type: 'html' });
+            if(bcd) entry.features.push({ key: bcd, type: 'html', line: e.line });
 
             // check inline style attribute
             const styleAttr = (e.attrs || []).find(a => a.name === 'style');
@@ -135,7 +174,7 @@ export async function scanProject(rootPatterns){
                 const inlineProps = scanCSS(`x{${styleAttr.value}}`);
                 for (const p of inlineProps) {
                   const bcd = mapCSSPropToBCD(p.property, p.value);
-                  if (bcd) entry.features.push({ key: bcd, type: 'css' });
+                  if (bcd) entry.features.push({ key: bcd, type: 'css', line: e.line });
                 }
               } catch (err) { /* ignore */ }
             }
@@ -144,13 +183,13 @@ export async function scanProject(rootPatterns){
           // inline script content
           if(e.tag === 'script' && e.script){
             const candidates = extractJsCandidates(e.script);
-            for(const c of candidates) entry.features.push({ key: c, type: 'js' });
+            for(const c of candidates) entry.features.push({ key: c.candidate, type: 'js', line: e.line });
           }
         }
       } else if(/\.jsx?$|\.tsx?$/.test(f.path)){
         const candidates = extractJsCandidates(f.text);
         for(const c of candidates){
-          entry.features.push({ key: c, type: 'js' });
+          entry.features.push({ key: c.candidate, type: 'js', line: c.line });
         }
       }
     }catch(e){ /* ignore file parse errors */ }
@@ -201,7 +240,7 @@ export async function scanProject(rootPatterns){
             // find feature id that contains the compat_feature (prefer exact mapping)
             const featureId = Object.keys(features).find(id => (features[id].compat_features || []).includes(usedKey) || id === usedKey || id === usedKey.split('.')[0]);
             const featureName = featureId ? (features[featureId].name || featureId) : usedKey;
-            reportByFile[file].push({ key: usedKey, featureId, featureName, status });
+            reportByFile[file].push({ key: usedKey, featureId, featureName, status, line: f.line });
           } else {
             // skip unmapped css/html keys
             continue;
@@ -212,7 +251,7 @@ export async function scanProject(rootPatterns){
           const featureId = Object.keys(features).find(id => id.toLowerCase().includes(candidate) || (features[id].name || '').toLowerCase().includes(candidate) || (features[id].compat_features || []).some(k => k.toLowerCase().includes(candidate)));
           if(featureId){
             const status = features[featureId].status || { baseline: false };
-            reportByFile[file].push({ key: f.key, featureId, featureName: features[featureId].name || featureId, status });
+            reportByFile[file].push({ key: f.key, featureId, featureName: features[featureId].name || featureId, status, line: f.line });
           } else {
             // skip unmapped JS candidates
             continue;
